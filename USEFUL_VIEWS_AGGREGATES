@@ -1,0 +1,79 @@
+Useful views AND user-defined aggregations
+-------------------------------------------
+
+-- VIEWS
+
+First location, ignoring "UNKNOWN" and "NOLOCATION"
+-----------------------------------------------------
+[1]
+CREATE MATERIALIZED VIEW first_cities AS
+SELECT userid, first_city
+FROM (
+    SELECT userid, COALESCE(properties->>'WNCity', 'UNKNOWN') as first_city,
+           row_number() OVER (PARTITION BY userid ORDER BY created_at) as r
+    FROM logs 
+    WHERE properties->>'WNCity' NOT IN ('UNKNOWN', 'NOLOCATION')
+) AS temp
+WHERE r = 1;
+
+[2]
+SELECT DISTINCT ON (userid) 
+    userid, first_value(properties->>'WNCity') OVER (PARTITION BY userid ORDER BY created_at) as first_city
+    FROM logs 
+    WHERE properties->>'WNCity' NOT IN ('UNKNOWN', 'NOLOCATION');
+
+[3]
+SELECT DISTINCT ON (userid, properties->>'WNCity') 
+userid, properties->>'WNCity', MIN(created_at) OVER (PARTITION BY userid) as first_city
+    FROM logs 
+    WHERE properties->>'WNCity' NOT IN ('UNKNOWN', 'NOLOCATION');
+
+
+
+Users whose locations are either UNKNOWN, NULL or NOLOCATION
+--------------------------------------------------------------
+SELECT userid FROM (
+	SELECT userid,  SUM(CASE city 
+				WHEN 'UNKNOWN' THEN 0
+				WHEN 'NOLOCATION' THEN 0 
+				WHEN NULL THEN 0
+				ELSE 1
+			END) AS sum_city
+	FROM logs
+	GROUP BY userid) AS temp
+WHERE sum_city=0;
+
+
+First time users
+--------------------
+CREATE TEMP VIEW OR REPLACE first_time_users AS
+SELECT DISTINCT userid
+FROM logs
+GROUP BY userid
+HAVING MIN(session) <= 1
+
+
+
+-- AGGREGATIONS
+
+
+
+FIRST(): first value that is not NULL
+------------------------------------------
+-- Create a function that always returns the first non-NULL item
+CREATE OR REPLACE FUNCTION public.first_agg ( anyelement, anyelement )
+RETURNS anyelement LANGUAGE sql IMMUTABLE STRICT AS $$
+        SELECT $1;
+$$;
+ 
+-- And then wrap an aggregate around it
+CREATE AGGREGATE public.first (
+        sfunc    = public.first_agg,
+        basetype = anyelement,
+        stype    = anyelement
+);
+
+
+
+
+
